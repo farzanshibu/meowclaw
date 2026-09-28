@@ -1,0 +1,30 @@
+# Gradle / Android
+.gradle/
+build/
+/local.properties
+.cxx/
+.externalNativeBuild/
+captures/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Python model training pipeline
+*.py
+*.jsonl
+venv/
+__pycache__/
+training_tasks.md
+enrich_dataset_prompt.md
+google-services.json
+/dist/
+
+# Release signing (never commit)
+keystore.properties

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status bar / Live Update icon: solid cat head, eyes, nose and claw marks cut out. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:pivotX="54" android:pivotY="54" android:scaleX="1.75" android:scaleY="1.75">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M30,52 L32,27 L46,39 L62,39 L76,27 L78,52 C80,70 68,81 54,81 C40,81 28,70 30,52 Z M41.4,56 a3.6,4.6 0 1,0 7.2,0 a3.6,4.6 0 1,0 -7.2,0 Z M59.4,56 a3.6,4.6 0 1,0 7.2,0 a3.6,4.6 0 1,0 -7.2,0 Z M51,63.5 L57,63.5 L54,67 Z M57.76,76.99 L66.76,65.49 L64.24,63.51 L55.24,75.01 Z M63.26,78.49 L72.26,66.99 L69.74,65.01 L60.74,76.51 Z M68.76,77.48 L75.76,68.48 L73.24,66.52 L66.24,75.52 Z" />
+    </group>
+</vector>

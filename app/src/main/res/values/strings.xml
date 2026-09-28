@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">MeowClaw uses this service to read your screen and act for you with a virtual mouse and keyboard: tapping, scrolling, dragging and typing to automate tasks. A cursor and a glowing screen edge show whenever the agent is in control.</string>
+    <string name="keyboard_subtype">MeowClaw</string>
+</resources>

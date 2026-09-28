@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MeowClaw: neubrutalist cat head with claw scratches (adaptive icon foreground). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:translateX="3.5" android:translateY="3.5">
+        <path android:fillColor="#111111" android:pathData="M30,52 L32,27 L46,39 L62,39 L76,27 L78,52 C80,70 68,81 54,81 C40,81 28,70 30,52 Z" />
+    </group>
+    <path
+        android:fillColor="#FFFDF5"
+        android:strokeColor="#111111"
+        android:strokeWidth="3.5"
+        android:strokeLineJoin="round"
+        android:pathData="M30,52 L32,27 L46,39 L62,39 L76,27 L78,52 C80,70 68,81 54,81 C40,81 28,70 30,52 Z" />
+    <path android:fillColor="#FF7EB6" android:pathData="M35.5,34 L36.5,44 L42,39.5 Z M72.5,34 L71.5,44 L66,39.5 Z" />
+    <path android:fillColor="#111111" android:pathData="M41.4,56 a3.6,4.6 0 1,0 7.2,0 a3.6,4.6 0 1,0 -7.2,0 Z M59.4,56 a3.6,4.6 0 1,0 7.2,0 a3.6,4.6 0 1,0 -7.2,0 Z" />
+    <path
+        android:fillColor="#FF5A5F"
+        android:strokeColor="#111111"
+        android:strokeWidth="1.2"
+        android:strokeLineJoin="round"
+        android:pathData="M51,63.5 L57,63.5 L54,67 Z" />
+    <path
+        android:strokeColor="#FF3B47"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M56.5,76 L65.5,64.5 M62,77.5 L71,66 M67.5,76.5 L74.5,67.5" />
+</vector>
