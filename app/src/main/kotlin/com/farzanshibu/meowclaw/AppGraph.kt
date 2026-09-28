@@ -33,10 +33,13 @@ import com.farzanshibu.meowclaw.llm.needle.NeedleEngine
 import com.farzanshibu.meowclaw.service.AgentService
 import com.farzanshibu.meowclaw.service.LiveStatus
 import com.farzanshibu.meowclaw.service.NotificationTools
+import com.farzanshibu.meowclaw.update.AppUpdater
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** Process-wide singletons. Constructed once in [MeowClawApp]. */
@@ -77,6 +80,7 @@ class AppGraph(val context: Context) {
     val controller = AgentController(this)
     /** Continuous voice: new commands when idle, steering while a task runs. */
     val handsFree = HandsFreeVoice(context) { controller.send(it) }
+    val updater = AppUpdater(context)
 
     /**
      * Deletes one on-device model, or all of them when [model] is null. The
@@ -92,8 +96,17 @@ class AppGraph(val context: Context) {
     fun start() {
         // Keep the foreground service in step with Telegram and running tasks.
         scope.launch {
-            settings.settings.distinctUntilChangedBy { Triple(it.telegramEnabled, it.telegramToken, it.onboardingCompleted) }
+            settings.settings.distinctUntilChangedBy { listOf(it.telegramEnabled, it.telegramToken, it.onboardingCompleted, it.agentEnabled) }
                 .collect { AgentService.sync(context) }
+        }
+        // Master power off: stop listening and anything in flight.
+        scope.launch {
+            settings.settings.map { it.agentEnabled }.distinctUntilChanged().collect { on ->
+                if (!on) {
+                    handsFree.stop()
+                    controller.cancel()
+                }
+            }
         }
         // Background listening needs the foreground service's microphone type.
         scope.launch { handsFree.active.collect { AgentService.sync(context) } }

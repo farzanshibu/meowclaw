@@ -29,6 +29,16 @@ class StepExecutor(private val graph: AppGraph) {
     private val input get() = graph.input
 
     suspend fun run(action: String, params: JsonObject): StepOutcome {
+        // Common alternative names map onto one implementation.
+        when (action) {
+            "tap" -> return run("click_at", params)
+            "double_tap" -> return run("double_click", params)
+            "back" -> return run("press_back", params)
+            "home" -> return run("press_home", params)
+            "recent_apps", "recents" -> return run("open_recents", params)
+            "notification", "notifications" -> return run("open_notifications", params)
+            "zoom" -> return run("pinch", params)
+        }
         fun xy(xKey: String = "x", yKey: String = "y"): Pair<Float, Float>? {
             val x = params.num(xKey) ?: return null
             val y = params.num(yKey) ?: return null
@@ -50,18 +60,35 @@ class StepExecutor(private val graph: AppGraph) {
             "mouse_move" -> xy()?.let { (x, y) -> input.move(x, y).toOutcome() } ?: bad("mouse_move needs x and y")
             "drag", "swipe" -> {
                 val (w, h) = input.screenSize()
-                val sx = params.num("startX")?.toFloat() ?: (w / 2f)
-                val sy = params.num("startY")?.toFloat() ?: (h * 0.8f)
-                val ex = params.num("endX")?.toFloat() ?: (w / 2f)
-                val ey = params.num("endY")?.toFloat() ?: (h * 0.25f)
+                val sx = (params.num("startX") ?: params.num("x1"))?.toFloat() ?: (w / 2f)
+                val sy = (params.num("startY") ?: params.num("y1"))?.toFloat() ?: (h * 0.8f)
+                val ex = (params.num("endX") ?: params.num("x2"))?.toFloat() ?: (w / 2f)
+                val ey = (params.num("endY") ?: params.num("y2"))?.toFloat() ?: (h * 0.25f)
                 val duration = params.num("duration_ms")?.toLong() ?: if (action == "drag") 600 else 300
                 input.drag(sx, sy, ex, ey, duration, hold = action == "drag").toOutcome()
             }
-            "scroll" -> input.scroll(params.str("direction") ?: "down").toOutcome()
+            "scroll" -> input.scroll(params.str("direction") ?: "down", amount = params.num("amount")?.toFloat()).toOutcome()
             "scroll_at" -> input.scrollAt(
                 params.str("direction") ?: "down",
                 params.num("x")?.toFloat(), params.num("y")?.toFloat(),
             ).toOutcome()
+            "pinch" -> {
+                // "direction": "in" zooms in, "out" zooms out, unless an explicit scale is given.
+                val scale = params.num("scale")?.toFloat()
+                    ?: if (params.str("direction")?.lowercase() == "out") 0.5f else 2f
+                input.pinch(params.num("x")?.toFloat(), params.num("y")?.toFloat(), scale).toOutcome()
+            }
+            "rotate" -> input.rotate(
+                params.num("x")?.toFloat(), params.num("y")?.toFloat(), (params.num("degrees") ?: 90.0).toFloat(),
+            ).toOutcome()
+            "find_element" -> findElement(params.str("text") ?: params.str("query").orEmpty(), params.str("type"))
+            "select_text" -> input.selectText(
+                params.str("field_hint"), params.num("start")?.toInt(), params.num("end")?.toInt(), params.str("text"),
+            ).toOutcome()
+            "copy" -> input.copy(params.str("field_hint")).toOutcome()
+            "paste" -> input.paste(params.str("text"), params.str("field_hint")).toOutcome()
+            "set_volume" -> info(graph.system.setVolume(params.num("level")?.toInt() ?: 50))
+            "set_brightness" -> info(graph.system.setBrightness(params.num("level")?.toInt() ?: 50))
             "type_text" -> input.typeText(params.str("text").orEmpty(), params.str("field_hint")).toOutcome()
             "keyboard_type" -> input.keyboardType(params.str("text").orEmpty()).toOutcome()
             "key_press", "hotkey" -> input.key(params.str("key").orEmpty(), params.strings("modifiers")).toOutcome()
@@ -73,7 +100,12 @@ class StepExecutor(private val graph: AppGraph) {
             "open_quick_settings" -> input.global("quick_settings").toOutcome()
             "lock_screen" -> input.global("lock_screen").toOutcome()
             "take_screenshot" -> input.global("screenshot").toOutcome()
-            "open_app" -> graph.apps.openApp(params.str("app_name").orEmpty()).let { StepOutcome(it.startsWith("Opened"), it) }
+            "open_app" -> {
+                val pkg = params.str("package") ?: params.str("package_name")
+                val result = if (!pkg.isNullOrBlank()) graph.apps.openPackage(pkg)
+                else graph.apps.openApp(params.str("app_name") ?: params.str("name").orEmpty())
+                StepOutcome(result.startsWith("Opened"), result)
+            }
             "wait" -> {
                 delay(1_000)
                 StepOutcome(true, "Waited")
@@ -101,6 +133,30 @@ class StepExecutor(private val graph: AppGraph) {
     private fun com.farzanshibu.meowclaw.input.InputResult.toOutcome() = StepOutcome(success, message)
     private fun bad(message: String) = StepOutcome(false, message)
     private fun info(message: String) = StepOutcome(!message.looksFailed(), message)
+
+    /**
+     * Lists on-screen elements whose text, description or view id contains [query],
+     * optionally only one [type] (clickable, editable, scrollable, checkable).
+     */
+    private suspend fun findElement(query: String, type: String?): StepOutcome {
+        if (query.isBlank() && type.isNullOrBlank()) return bad("find_element needs text")
+        graph.screen.describe(null, compressed = true)
+        val hits = graph.screen.lastNodes.filter { n ->
+            (query.isBlank() || n.text.contains(query, true) || n.contentDescription.contains(query, true) || n.viewId.contains(query, true)) &&
+                when (type?.lowercase()) {
+                    "clickable", "button" -> n.isClickable
+                    "editable", "input", "field" -> n.isEditable
+                    "scrollable", "list" -> n.isScrollable
+                    "checkable", "toggle", "switch" -> n.isCheckable
+                    else -> true
+                }
+        }
+        if (hits.isEmpty()) return bad("No element matches \"$query\" on this screen")
+        return StepOutcome(true, hits.take(15).joinToString("\n", prefix = "Found ${hits.size}:\n") { n ->
+            val label = n.text.ifEmpty { n.contentDescription }.take(60)
+            "[${n.index}] \"$label\" ${n.className} center:(${n.bounds.centerX()},${n.bounds.centerY()})"
+        })
+    }
 
     /** Polls the screen until an element's text or description contains [text]. */
     private suspend fun waitFor(text: String, timeoutSeconds: Double): StepOutcome {
@@ -140,7 +196,8 @@ class ActionHandler(private val graph: AppGraph) {
         val p = action.params
         return try {
             val details: String = when (action.action) {
-                "open_app" -> graph.apps.openApp(p.str("app_name").orEmpty())
+                "open_app" -> p.str("package")?.takeIf { it.isNotBlank() }?.let(graph.apps::openPackage)
+                    ?: graph.apps.openApp(p.str("app_name").orEmpty())
                 "launch_package" -> graph.apps.openPackage(p.str("package_name").orEmpty())
                 "make_call" -> graph.communication.makeCall(p.str("contact_name"), p.str("phone_number"))
                 "send_sms" -> graph.communication.sendSms(p.str("contact_name"), p.str("phone_number"), p.str("message").orEmpty())
@@ -156,7 +213,11 @@ class ActionHandler(private val graph: AppGraph) {
                 "open_url" -> graph.apps.openUrl(p.str("url").orEmpty())
                 "read_screen" -> graph.screen.describe(null, compressed = false)
                 "click_element", "type_on_screen", "scroll_screen", "press_back", "click_text", "click_at",
-                "key_press", "press_enter", "press_home" -> {
+                "double_click", "long_press", "right_click", "drag", "swipe", "scroll", "scroll_at", "mouse_move",
+                "tap", "double_tap", "back", "home", "recent_apps", "pinch", "zoom", "rotate",
+                "find_element", "select_text", "copy", "paste",
+                "type_text", "keyboard_type", "key_press", "hotkey", "press_enter", "press_home", "open_recents",
+                "open_notifications", "open_quick_settings", "lock_screen", "take_screenshot" -> {
                     val step = when (action.action) {
                         "type_on_screen" -> "type_text"
                         "scroll_screen" -> "scroll"

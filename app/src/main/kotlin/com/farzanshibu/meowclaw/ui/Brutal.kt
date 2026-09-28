@@ -252,16 +252,19 @@ fun Tag(text: String, fill: Color, modifier: Modifier = Modifier, icon: ImageVec
 @Composable
 fun BrutalSwitch(checked: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     val c = Brutal.colors
-    val knob by animateDpAsState(if (checked) 22.dp else 2.dp, label = "knob")
+    // Same gap on every side of the knob, measured from the outside edge.
+    val width = 52.dp
+    val height = 30.dp
+    val inset = 5.dp
+    val knobSize = height - inset * 2
+    val knob by animateDpAsState(if (checked) width - inset - knobSize else inset, label = "knob")
     Box(
-        modifier.size(width = 50.dp, height = 30.dp)
-            .brutal(if (checked) c.green else c.surface, c.ink, c.shadow, 15.dp, shadowOffset = 0.dp)
+        modifier.size(width = width, height = height)
+            .brutal(if (checked) c.green else c.surface, c.ink, c.shadow, height / 2, shadowOffset = 0.dp)
             .clickable(role = Role.Switch) { onChange(!checked) },
+        contentAlignment = Alignment.CenterStart,
     ) {
-        Box(
-            Modifier.offset(x = knob, y = 2.dp).size(22.dp)
-                .clip(RoundedCornerShape(11.dp)).background(c.ink),
-        )
+        Box(Modifier.offset(x = knob).size(knobSize).clip(RoundedCornerShape(knobSize / 2)).background(c.ink))
     }
 }
 

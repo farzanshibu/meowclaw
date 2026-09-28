@@ -60,11 +60,14 @@ jobs:
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest
 
+      # Release builds take their version from the tag (v2.1.0 → versionCode 20100),
+      # which the in-app updater compares against update.json.
       - name: Build APKs (universal + per-ABI)
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+          RELEASE_TAG: ${{ inputs.release_tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name || '') }}
         run: |
-          ./gradlew :app:assembleRelease -PsplitAbi
+          ./gradlew :app:assembleRelease -PsplitAbi ${RELEASE_TAG:+-PreleaseVersion=$RELEASE_TAG}
           mkdir -p dist
           cp app/build/outputs/apk/release/app-universal-release*.apk dist/app-universal-release.apk
           cp app/build/outputs/apk/release/app-arm64-v8a-release*.apk dist/app-arm64-v8a-release.apk
@@ -87,3 +90,35 @@ jobs:
           gh release view "$TAG" >/dev/null 2>&1 \
             || gh release create "$TAG" --target "$GITHUB_SHA" --title "MeowClaw $TAG" --generate-notes
           gh release upload "$TAG" dist/* --clobber
+
+      # The app reads releases/latest/download/update.json to find new versions.
+      - name: Publish update.json
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          NOTES=$(gh release view "$TAG" --json body --jq .body)
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          TAG="$TAG" NOTES="$NOTES" BASE="$BASE" python3 - <<'PY'
+          import hashlib, json, os, re
+          tag = os.environ["TAG"]
+          version = tag.lstrip("v")
+          parts = [int(re.sub(r"\D", "", p) or 0) for p in version.split("-")[0].split(".")] + [0, 0, 0]
+          apks = {}
+          for abi in ["arm64-v8a", "armeabi-v7a", "x86_64", "universal"]:
+              name = f"app-{abi}-release.apk"
+              path = os.path.join("dist", name)
+              data = open(path, "rb").read()
+              apks[abi] = {"url": f"{os.environ['BASE']}/{name}", "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+          manifest = {
+              "versionCode": parts[0] * 10000 + parts[1] * 100 + parts[2],
+              "versionName": version,
+              "tag": tag,
+              "notes": os.environ.get("NOTES", ""),
+              "releaseUrl": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{tag}",
+              "apks": apks,
+          }
+          json.dump(manifest, open("update.json", "w"), indent=2)
+          PY
+          gh release upload "$TAG" update.json --clobber

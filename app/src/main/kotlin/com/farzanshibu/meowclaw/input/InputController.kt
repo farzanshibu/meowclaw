@@ -2,9 +2,12 @@ package com.farzanshibu.meowclaw.input
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.RectF
 import android.os.Build
 import android.view.KeyEvent
 import android.view.WindowManager
@@ -87,6 +90,8 @@ class InputController(private val context: Context, private val shell: ShizukuSh
         service?.let { s ->
             s.overlay.click(cx, cy)
             if (s.perform(stroke(cx, cy, cx, cy, 0, 60))) return ok("Clicked at (${cx.toInt()}, ${cy.toInt()})")
+            // Gesture refused or cancelled (screen off, touch in progress): click the node under the point.
+            if (s.clickAt(cx, cy)) return ok("Clicked the element at (${cx.toInt()}, ${cy.toInt()})")
         }
         if (shell.isReady && shell.succeeded("input tap ${cx.toInt()} ${cy.toInt()}")) {
             return ok("Clicked at (${cx.toInt()}, ${cy.toInt()}) via ADB")
@@ -137,19 +142,17 @@ class InputController(private val context: Context, private val shell: ShizukuSh
         pointAt(sx, sy, if (hold) "Drag" else "Swipe")
         service?.let { s ->
             if (hold) {
-                // Hold first so launchers and lists pick the item up, then move.
-                val path = Path().apply { moveTo(sx, sy); lineTo(sx + 1, sy + 1); lineTo(ex, ey) }
-                val gesture = GestureDescription.Builder()
-                    .addStroke(GestureDescription.StrokeDescription(path, 0, 700 + durationMs))
-                    .build()
+                // One finger, three continued strokes: hold still so launchers and lists
+                // pick the item up, move, then rest before lifting so the drop lands.
+                // (A single stroke moves at constant speed, so it never really holds.)
+                val hold = GestureDescription.StrokeDescription(Path().apply { moveTo(sx, sy) }, 0, HOLD_MS, true)
+                val move = hold.continueStroke(Path().apply { moveTo(sx, sy); lineTo(ex, ey) }, 0, durationMs, true)
+                val rest = move.continueStroke(Path().apply { moveTo(ex, ey) }, 0, 250, false)
                 s.overlay.click(sx, sy, long = true)
-                val dispatched = coroutineScope {
-                    val cursor = async {
-                        delay(700)
-                        s.overlay.dragCursor(sx, sy, ex, ey, durationMs)
-                    }
-                    s.perform(gesture).also { cursor.await() }
-                }
+                val dispatched = s.perform(GestureDescription.Builder().addStroke(hold).build()) && coroutineScope {
+                    val cursor = async { s.overlay.dragCursor(sx, sy, ex, ey, durationMs) }
+                    s.perform(GestureDescription.Builder().addStroke(move).build()).also { cursor.await() }
+                } && s.perform(GestureDescription.Builder().addStroke(rest).build())
                 if (dispatched) return ok("Dragged from (${sx.toInt()},${sy.toInt()}) to (${ex.toInt()},${ey.toInt()})")
             } else {
                 val dispatched = coroutineScope {
@@ -180,39 +183,163 @@ class InputController(private val context: Context, private val shell: ShizukuSh
             "right" -> listOf(cx + dist, cy, cx - dist, cy)
             else -> listOf(cx, cy + dist, cx, cy - dist)
         }
-        return drag(x1, y1, x2, y2, 350).let { if (it.success) ok("Scrolled $direction") else it }
+        val swiped = drag(x1, y1, x2, y2, 350)
+        if (swiped.success) return ok("Scrolled $direction")
+        // Swipe refused: ask the list itself to scroll.
+        if (service?.scrollNode(direction, null) == true) return ok("Scrolled $direction")
+        return swiped
     }
 
-    /** Scroll the first scrollable container, falling back to a swipe gesture. */
-    suspend fun scroll(direction: String, target: String? = null): InputResult {
-        service?.let { s ->
-            if (direction.lowercase() in setOf("up", "down", "forward", "backward") && s.scrollNode(direction, target)) {
-                return ok("Scrolled $direction")
-            }
+    /**
+     * Scroll the main list, falling back to a swipe gesture. [amount] (0.1–0.9 of the
+     * screen) asks for a swipe of that length instead of the list's own page step.
+     */
+    suspend fun scroll(direction: String, target: String? = null, amount: Float? = null): InputResult {
+        val dir = when (direction.lowercase()) {
+            "forward" -> "down"
+            "backward" -> "up"
+            else -> direction.lowercase()
         }
-        return scrollAt(if (direction == "forward") "down" else if (direction == "backward") "up" else direction)
+        if (amount != null) return scrollAt(dir, amount = amount)
+        service?.let { s ->
+            if (dir in setOf("up", "down") && s.scrollNode(dir, target)) return ok("Scrolled $dir")
+        }
+        return scrollAt(dir)
+    }
+
+    // ─── Two fingers ─────────────────────────────────────────────
+
+    /**
+     * Pinch around ([x], [y]): [scale] > 1 spreads the fingers (zoom in), < 1
+     * brings them together (zoom out). Accessibility only; ADB has no multi-touch.
+     */
+    suspend fun pinch(x: Float? = null, y: Float? = null, scale: Float = 2f, durationMs: Long = 450): InputResult {
+        val s = service ?: return fail("Pinch needs the accessibility service")
+        val (w, h) = screenSize()
+        val (cx, cy) = clamp(x ?: (w / 2f), y ?: (h / 2f))
+        val factor = scale.coerceIn(0.2f, 5f)
+        // Fingers travel along a diagonal; the wider span must still fit on screen.
+        val maxHalf = minOf(cx, cy, w - cx, h - cy, w * 0.4f) * 0.95f
+        val (fromHalf, toHalf) = if (factor >= 1f) (maxHalf / factor) to maxHalf else maxHalf to (maxHalf * factor)
+        val d = 0.7071f
+        fun finger(sign: Float) = Path().apply {
+            moveTo(cx + sign * fromHalf * d, cy + sign * fromHalf * d)
+            lineTo(cx + sign * toHalf * d, cy + sign * toHalf * d)
+        }
+        pointAt(cx, cy, if (factor >= 1f) "Zoom in" else "Zoom out")
+        s.overlay.click(cx, cy)
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(finger(-1f), 0, durationMs))
+            .addStroke(GestureDescription.StrokeDescription(finger(1f), 0, durationMs))
+            .build()
+        return if (s.perform(gesture)) ok(if (factor >= 1f) "Zoomed in ×$factor" else "Zoomed out ×$factor")
+        else fail("Pinch failed")
+    }
+
+    /** Two fingers turning around ([x], [y]); positive [degrees] is clockwise (maps, photos). */
+    suspend fun rotate(x: Float? = null, y: Float? = null, degrees: Float = 90f, durationMs: Long = 600): InputResult {
+        val s = service ?: return fail("Rotate needs the accessibility service")
+        val (w, h) = screenSize()
+        val (cx, cy) = clamp(x ?: (w / 2f), y ?: (h / 2f))
+        val radius = minOf(cx, cy, w - cx, h - cy, w * 0.3f) * 0.9f
+        val oval = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
+        val sweep = degrees.coerceIn(-300f, 300f)
+        fun finger(startAngle: Float) = Path().apply { arcTo(oval, startAngle, sweep, true) }
+        pointAt(cx, cy, "Rotate")
+        s.overlay.click(cx, cy)
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(finger(-90f), 0, durationMs))
+            .addStroke(GestureDescription.StrokeDescription(finger(90f), 0, durationMs))
+            .build()
+        return if (s.perform(gesture)) ok("Rotated ${sweep.toInt()}°") else fail("Rotate failed")
     }
 
     // ─── Node targets ────────────────────────────────────────────
 
-    suspend fun clickText(text: String): InputResult {
+    suspend fun clickText(label: String): InputResult {
         val s = service ?: return fail("Accessibility service is not running")
+        // Labels in the compressed dump are cut with "..." and models often keep the quotes.
+        val text = label.trim().trim('"', '\'', '“', '”').removeSuffix("...").removeSuffix("…").trim()
+        if (text.isEmpty()) return fail("click_text needs text")
         s.findTextTarget(text)?.let { pointAt(it.exactCenterX(), it.exactCenterY(), "Click") ; s.overlay.click(it.exactCenterX(), it.exactCenterY()) }
         return if (s.clickByText(text)) ok("Clicked \"$text\"") else fail("Could not find \"$text\" to click")
     }
 
     suspend fun clickNode(node: UiNode): InputResult = tap(node.bounds.exactCenterX(), node.bounds.exactCenterY())
 
+    // ─── Selection and clipboard ─────────────────────────────────
+
+    /**
+     * Selects text in a field: characters [start]..[end], or all of it. Without a
+     * field, selects the word under [text] on screen by long-pressing it.
+     */
+    suspend fun selectText(fieldHint: String? = null, start: Int? = null, end: Int? = null, text: String? = null): InputResult {
+        val s = service ?: return fail("Accessibility service is not running")
+        if (text.isNullOrBlank()) {
+            s.editableTarget(fieldHint)?.let { pointAt(it.exactCenterX(), it.exactCenterY(), "Select") }
+            s.selectText(fieldHint, start, end)?.let { return ok("Selected \"${it.take(80)}\"") }
+            // Fields that ignore ACTION_SET_SELECTION still take select-all from the keyboard.
+            if (start == null && end == null && s.canUseInputMethod && key("a", listOf("ctrl")).success) return ok("Selected all")
+            return fail("No text field to select in")
+        }
+        val target = s.findTextTarget(text) ?: return fail("Could not find \"$text\" to select")
+        return longPress(target.exactCenterX(), target.exactCenterY(), 700).let {
+            if (it.success) ok("Selected text at \"$text\" (drag the handles or copy next)") else it
+        }
+    }
+
+    suspend fun copy(fieldHint: String? = null): InputResult {
+        val s = service ?: return fail("Accessibility service is not running")
+        label("Copy")
+        if (s.copySelection(fieldHint)) return ok("Copied the selection")
+        if (key("copy").success || key("c", listOf("ctrl")).success) return ok("Copied")
+        // Non-editable selections show a floating "Copy" button.
+        if (s.clickByText("Copy")) return ok("Copied")
+        return fail("Nothing selected to copy")
+    }
+
+    /** Pastes the clipboard, or [text] after putting it on the clipboard. */
+    suspend fun paste(text: String? = null, fieldHint: String? = null): InputResult {
+        val s = service ?: return fail("Accessibility service is not running")
+        if (!text.isNullOrEmpty()) {
+            context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("MeowClaw", text))
+        }
+        s.editableTarget(fieldHint)?.let { pointAt(it.exactCenterX(), it.exactCenterY(), "Paste") }
+        if (s.paste(fieldHint)) return ok(if (text.isNullOrEmpty()) "Pasted" else "Pasted \"${text.take(80)}\"")
+        if (key("paste").success || key("v", listOf("ctrl")).success) return ok("Pasted")
+        return fail("No text field to paste into")
+    }
+
     // ─── Virtual keyboard ────────────────────────────────────────
 
     /** Replaces the field's text (like typing after select-all). */
     suspend fun typeText(text: String, fieldHint: String? = null): InputResult {
         val s = service
-        s?.editableTarget(fieldHint)?.let { pointAt(it.exactCenterX(), it.exactCenterY(), "Typing") }
+        // No field yet: many apps show a search button that opens the real field first.
+        if (s != null && s.editableTarget(fieldHint) == null && s.openSearchField()) {
+            label("Opening search")
+            for (i in 0 until 15) {
+                delay(200)
+                if (s.editableTarget(fieldHint) != null) break
+            }
+        }
+        val field = s?.editableTarget(fieldHint)
+        field?.let { pointAt(it.exactCenterX(), it.exactCenterY(), "Typing") }
         if (s?.setText(text, fieldHint) != null) return ok("Typed \"$text\"")
 
-        // Fields that ignore ACTION_SET_TEXT: type through an input method.
+        // The field ignored ACTION_SET_TEXT. Tap it so it gets a real input
+        // connection, then type through the input method like a keyboard.
+        if (s != null && field != null && !s.canUseInputMethod) {
+            tap(field.exactCenterX(), field.exactCenterY())
+            delay(350)
+        }
         if (commitViaInputMethod(text, clearFirst = true)) return ok("Typed \"$text\" with the virtual keyboard")
+
+        // Last accessibility route: replace the text with a paste.
+        if (s != null && field != null) {
+            s.selectText(fieldHint, null, null)
+            if (paste(text, fieldHint).success) return ok("Typed \"$text\" by pasting")
+        }
 
         if (shell.isReady) {
             if (shell.succeeded("input text ${adbText(text)}")) return ok("Typed \"$text\" via ADB")
@@ -340,6 +467,9 @@ class InputController(private val context: Context, private val shell: ShizukuSh
         (modifiers.map { it.lowercase() } + key).joinToString("+")
 
     companion object {
+        /** Long enough for launchers and lists to treat the press as a pick-up. */
+        private const val HOLD_MS = 700L
+
         /**
          * Argument for `input text`: it reads "%s" as a space, and the command
          * runs through exactly one `sh -c`, so single quoting is enough.

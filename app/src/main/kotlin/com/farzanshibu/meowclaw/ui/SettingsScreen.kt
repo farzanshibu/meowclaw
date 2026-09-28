@@ -82,6 +82,8 @@ import com.farzanshibu.meowclaw.service.AgentNotificationListener
 import com.farzanshibu.meowclaw.llm.cactus.LocalModelCatalog
 import com.farzanshibu.meowclaw.llm.cactus.ModelState
 import com.farzanshibu.meowclaw.llm.needle.NeedleState
+import com.farzanshibu.meowclaw.update.UpdateManifest
+import com.farzanshibu.meowclaw.update.UpdateState
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -149,6 +151,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenHistory: () -> Unit) {
 
                 TelegramSection(settings)
                 PermissionsSection()
+                UpdateSection()
 
                 Section("Logs & about", c.blue) {
                     BrutalButton(onOpenHistory, Modifier.fillMaxWidth(), fill = c.green) { Text("TASK HISTORY") }
@@ -383,7 +386,12 @@ fun OnDeviceSection(settings: AppSettings) {
     val c = Brutal.colors
     val state by g.needle.state.collectAsStateWithLifecycle()
     Section("Needle 3 · instant actions", c.green, "35 MB tool-calling model. Opens apps, calls, texts, alarms and more offline in milliseconds.") {
-        when (val s = state) {
+        SwitchRow(
+            "Use Needle",
+            if (settings.needleEnabled) "Try instant on-device actions before the brain" else "Off: every request goes to the language model",
+            settings.needleEnabled,
+        ) { v -> g.settings.update { it.copy(needleEnabled = v) } }
+        if (settings.needleEnabled) when (val s = state) {
             NeedleState.Unsupported -> Text(
                 "Not supported on this CPU (${Build.SUPPORTED_ABIS.firstOrNull()}).", color = c.red, fontWeight = FontWeight.Bold,
             )
@@ -399,9 +407,6 @@ fun OnDeviceSection(settings: AppSettings) {
             }
             NeedleState.Ready -> {
                 StatusLine(true, "Needle ready")
-                SwitchRow("Use Needle first", "Try instant on-device actions before the brain", settings.needleEnabled) { v ->
-                    g.settings.update { it.copy(needleEnabled = v) }
-                }
                 Stepper(
                     "Confidence to skip the brain (%)", (settings.needleMinConfidence * 100).roundToInt(), 10, 95, step = 5,
                 ) { v -> g.settings.update { it.copy(needleMinConfidence = v / 100.0) } }
@@ -525,6 +530,50 @@ fun PermissionsSection() {
             ) { Text("GRANT", fontSize = 12.sp) }
         }
     }
+}
+
+@Composable
+fun UpdateSection() {
+    val g = LocalContext.current.graph
+    val c = Brutal.colors
+    val scope = rememberCoroutineScope()
+    val state by g.updater.status.collectAsStateWithLifecycle()
+    Section("Updates", c.yellow, "Installed: v${g.updater.currentVersion}. New versions come from GitHub releases.") {
+        when (val s = state) {
+            UpdateState.Idle -> Unit
+            UpdateState.Checking -> ProgressLine("Checking…", null)
+            UpdateState.UpToDate -> StatusLine(true, "You're on the latest version")
+            is UpdateState.Available -> UpdateNotes(s.manifest)
+            is UpdateState.Downloading -> ProgressLine(
+                "Downloading v${s.manifest.versionName}" + (s.progress?.let { " ${(it * 100).roundToInt()}%" } ?: "…"), s.progress,
+            )
+            is UpdateState.Installing -> ProgressLine("Installing v${s.manifest.versionName}…", null)
+            is UpdateState.Failed -> Text(s.message, color = c.red, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        }
+        val manifest = (state as? UpdateState.Available)?.manifest ?: (state as? UpdateState.Failed)?.manifest
+        val working = state is UpdateState.Checking || state is UpdateState.Downloading || state is UpdateState.Installing
+        if (manifest != null) {
+            BrutalButton({ scope.launch { g.updater.install(manifest) } }, Modifier.fillMaxWidth(), fill = c.green, enabled = !working) {
+                Icon(Icons.Rounded.CloudDownload, null)
+                Spacer(Modifier.width(8.dp))
+                Text("UPDATE TO V${manifest.versionName}")
+            }
+        } else {
+            BrutalButton({ scope.launch { g.updater.check(force = true) } }, Modifier.fillMaxWidth(), fill = c.surface, enabled = !working) {
+                Text("CHECK FOR UPDATES")
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateNotes(manifest: UpdateManifest) {
+    val c = Brutal.colors
+    StatusLine(false, "v${manifest.versionName} is available")
+    manifest.notes.takeIf { it.isNotBlank() }?.let {
+        Text(it.take(600), fontSize = 12.5.sp, color = c.muted)
+    }
+    manifest.releaseUrl.takeIf { it.isNotBlank() }?.let { LinkRow("Release notes", it) }
 }
 
 // ─── Building blocks ──────────────────────────────────────────────
