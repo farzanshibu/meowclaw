@@ -62,6 +62,12 @@ val keystoreProps = Properties().apply {
     rootProject.file("keystore.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
 }
 
+/** "2.1.3" or "2.1.3-beta" → 20103; always above the 3000 of pre-updater builds. */
+fun versionCodeOf(version: String): Int {
+    val parts = version.substringBefore('-').split('.').map { it.filter(Char::isDigit).toIntOrNull() ?: 0 }
+    return parts.getOrElse(0) { 0 } * 10_000 + parts.getOrElse(1) { 0 } * 100 + parts.getOrElse(2) { 0 }
+}
+
 android {
     namespace = "com.farzanshibu.meowclaw"
     compileSdk = 37
@@ -70,8 +76,11 @@ android {
         applicationId = "com.farzanshibu.meowclaw"
         minSdk = 26
         targetSdk = 37
-        versionCode = 3000
-        versionName = "2.0.0"
+        // CI passes the release tag (-PreleaseVersion=v2.1.0); the in-app updater compares versionCode.
+        val release = (findProperty("releaseVersion") as String?)?.removePrefix("v")?.takeIf { it.isNotBlank() }
+        versionName = release ?: "2.0.0"
+        versionCode = release?.let(::versionCodeOf) ?: 3000
+        buildConfigField("String", "UPDATE_URL", "\"https://github.com/farzanshibu/meowclaw/releases/latest/download/update.json\"")
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")

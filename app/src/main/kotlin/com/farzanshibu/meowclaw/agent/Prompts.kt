@@ -97,8 +97,16 @@ Mouse / touch:
 - long_press: {"x": 540, "y": 960} - Press and hold, like a right click (context menus, selection, rearranging)
 - drag: {"startX": 540, "startY": 1500, "endX": 540, "endY": 600} - Press, move and release (sliders, drag and drop)
 - swipe: {"startX": 540, "startY": 2000, "endX": 540, "endY": 500} - Quick swipe (open app drawer, carousels)
-- scroll: {"direction": "down"} - Scroll the list down/up/left/right
+- scroll: {"direction": "down", "amount": 0.5} - Scroll the list down/up/left/right; amount (optional, 0.1-0.9) is the share of the screen to move
 - scroll_at: {"x": 540, "y": 1200, "direction": "down"} - Scroll a specific area, like a mouse wheel over it
+- pinch: {"x": 540, "y": 1200, "direction": "in"} - Two-finger zoom: "in" enlarges, "out" shrinks (maps, photos, web pages); optional "scale" like 3 or 0.5
+- rotate: {"x": 540, "y": 1200, "degrees": 90} - Two-finger rotate (maps, photo editors); negative is counter-clockwise
+Finding:
+- find_element: {"text": "Send", "type": "clickable"} - List elements matching text (type optional: clickable, editable, scrollable, checkable)
+Text and clipboard:
+- select_text: {"field_hint": "optional", "start": 0, "end": 5} - Select characters in a field (whole text if start/end omitted); or {"text": "word"} to select a word shown on screen
+- copy: {} - Copy the current selection
+- paste: {"text": "optional text to paste"} - Paste the clipboard (or this text) into the focused field
 Keyboard:
 - type_text: {"text": "hello", "field_hint": "optional hint"} - Replace the text of the focused/first edit field
 - keyboard_type: {"text": " more"} - Type at the cursor without clearing the field
@@ -112,7 +120,9 @@ System:
 - open_quick_settings: {} - Open quick settings (Wi-Fi, Bluetooth, flashlight, airplane mode toggles)
 - take_screenshot: {} - Save a screenshot
 - lock_screen: {} - Lock the phone
-- open_app: {"app_name": "WhatsApp"} - Open an app
+- open_app: {"app_name": "WhatsApp"} or {"package": "com.whatsapp"} - Open an app
+- set_volume: {"level": 50} - Set media volume 0-100
+- set_brightness: {"level": 50} - Set screen brightness 0-100
 - open_deeplink: {"uri": "https://...", "package": "optional"} - Jump straight to an app screen or URI
 - web_search: {"query": "..."} - Search the web in the browser
 Information:
@@ -148,6 +158,7 @@ If the wanted item is not on screen, scroll or press_back to a parent page. Call
     private val S = "string"
     private val I = "integer"
     private val B = "boolean"
+    private val N = "number"
 
     /** Top-level actions for on-device models with native function calling. */
     val AGENT_TOOLS = listOf(
@@ -181,11 +192,19 @@ If the wanted item is not on screen, scroll or press_back to a parent page. Call
         ToolSpec("click_element", "Tap the element with this [index] from the screen dump", mapOf("index" to (I to "element index")), listOf("index")),
         ToolSpec("click_text", "Tap the element showing this exact text", mapOf("text" to (S to "visible text")), listOf("text")),
         ToolSpec("click_at", "Tap screen coordinates", mapOf("x" to (I to "x"), "y" to (I to "y")), listOf("x", "y")),
+        ToolSpec("double_click", "Double tap at coordinates (zoom, select a word)", mapOf("x" to (I to "x"), "y" to (I to "y")), listOf("x", "y")),
         ToolSpec("long_press", "Press and hold at coordinates (context menu)", mapOf("x" to (I to "x"), "y" to (I to "y")), listOf("x", "y")),
+        ToolSpec("drag", "Press, hold, move and release (move icons, sliders, drag and drop)", mapOf("startX" to (I to "start x"), "startY" to (I to "start y"), "endX" to (I to "end x"), "endY" to (I to "end y")), listOf("startX", "startY", "endX", "endY")),
         ToolSpec("type_text", "Replace the text of the focused field", mapOf("text" to (S to "text to type")), listOf("text")),
+        ToolSpec("keyboard_type", "Type at the cursor without clearing the field", mapOf("text" to (S to "text to type")), listOf("text")),
+        ToolSpec("copy", "Copy the selected text"),
+        ToolSpec("paste", "Paste into the focused field", mapOf("text" to (S to "text to paste, optional"))),
+        ToolSpec("find_element", "List elements on screen that match some text", mapOf("text" to (S to "text to look for")), listOf("text")),
+        ToolSpec("pinch", "Two-finger zoom in or out", mapOf("x" to (I to "x"), "y" to (I to "y"), "direction" to (S to "in or out")), listOf("direction")),
         ToolSpec("key_press", "Press a keyboard key such as enter, tab, backspace, escape, up, down", mapOf("key" to (S to "key name")), listOf("key")),
         ToolSpec("press_enter", "Submit the focused search or form field"),
         ToolSpec("scroll", "Scroll the list", mapOf("direction" to (S to "up, down, left or right")), listOf("direction")),
+        ToolSpec("scroll_at", "Scroll the area under a point", mapOf("x" to (I to "x"), "y" to (I to "y"), "direction" to (S to "up, down, left or right")), listOf("x", "y", "direction")),
         ToolSpec("swipe", "Swipe from one point to another (app drawer, carousels, dismiss)", mapOf("startX" to (I to "start x"), "startY" to (I to "start y"), "endX" to (I to "end x"), "endY" to (I to "end y")), listOf("startX", "startY", "endX", "endY")),
         ToolSpec("press_back", "Go back"),
         ToolSpec("press_home", "Go to the home screen"),
@@ -205,7 +224,15 @@ If the wanted item is not on screen, scroll or press_back to a parent page. Call
         ToolSpec("long_press", "Press and hold, like a right click (context menus, selection)", mapOf("x" to (I to "x"), "y" to (I to "y"), "duration_ms" to (I to "hold time, default 800")), listOf("x", "y")),
         ToolSpec("drag", "Press, move and release (sliders, drag and drop)", mapOf("startX" to (I to "start x"), "startY" to (I to "start y"), "endX" to (I to "end x"), "endY" to (I to "end y")), listOf("startX", "startY", "endX", "endY")),
         ToolSpec("swipe", "Quick swipe (app drawer, carousels, dismiss)", mapOf("startX" to (I to "start x"), "startY" to (I to "start y"), "endX" to (I to "end x"), "endY" to (I to "end y")), listOf("startX", "startY", "endX", "endY")),
-        ToolSpec("scroll", "Scroll the main list", mapOf("direction" to (S to "up, down, left or right")), listOf("direction")),
+        ToolSpec("scroll", "Scroll the main list", mapOf("direction" to (S to "up, down, left or right"), "amount" to (N to "optional share of the screen, 0.1-0.9")), listOf("direction")),
+        ToolSpec("pinch", "Two-finger zoom (maps, photos, web pages)", mapOf("x" to (I to "centre x"), "y" to (I to "centre y"), "direction" to (S to "in or out"), "scale" to (N to "optional factor, e.g. 3 or 0.5")), listOf("direction")),
+        ToolSpec("rotate", "Two-finger rotate (maps, photo editors)", mapOf("x" to (I to "centre x"), "y" to (I to "centre y"), "degrees" to (I to "clockwise degrees, negative for counter-clockwise")), listOf("degrees")),
+        ToolSpec("find_element", "List on-screen elements matching text", mapOf("text" to (S to "text, description or id to look for"), "type" to (S to "optional: clickable, editable, scrollable, checkable")), listOf("text")),
+        ToolSpec("select_text", "Select text in a field (all of it, or start..end), or the word shown at some text", mapOf("field_hint" to (S to "optional field label"), "start" to (I to "optional first character"), "end" to (I to "optional end character"), "text" to (S to "optional on-screen word to select instead"))),
+        ToolSpec("copy", "Copy the current selection"),
+        ToolSpec("paste", "Paste the clipboard, or the given text, into the focused field", mapOf("text" to (S to "optional text to paste"), "field_hint" to (S to "optional field label"))),
+        ToolSpec("set_volume", "Set media volume percent", mapOf("level" to (I to "0-100")), listOf("level")),
+        ToolSpec("set_brightness", "Set screen brightness percent", mapOf("level" to (I to "0-100")), listOf("level")),
         ToolSpec("scroll_at", "Scroll a specific area, like a mouse wheel over it", mapOf("x" to (I to "x"), "y" to (I to "y"), "direction" to (S to "up, down, left or right")), listOf("x", "y", "direction")),
         ToolSpec("type_text", "Replace the text of the focused or first edit field", mapOf("text" to (S to "text to type"), "field_hint" to (S to "optional label of the field")), listOf("text")),
         ToolSpec("keyboard_type", "Type at the cursor without clearing the field", mapOf("text" to (S to "text to type")), listOf("text")),
@@ -218,7 +245,7 @@ If the wanted item is not on screen, scroll or press_back to a parent page. Call
         ToolSpec("open_quick_settings", "Open quick settings toggles (Wi-Fi, Bluetooth, flashlight, airplane mode)"),
         ToolSpec("take_screenshot", "Save a screenshot"),
         ToolSpec("lock_screen", "Lock the phone"),
-        ToolSpec("open_app", "Open an app by name", mapOf("app_name" to (S to "app name")), listOf("app_name")),
+        ToolSpec("open_app", "Open an app by name or package", mapOf("app_name" to (S to "app name"), "package" to (S to "package name, optional"))),
         ToolSpec("open_deeplink", "Jump straight to an app screen or URI", mapOf("uri" to (S to "the URI"), "package" to (S to "app package, optional")), listOf("uri")),
         ToolSpec("web_search", "Search the web in the browser", mapOf("query" to (S to "search terms")), listOf("query")),
         ToolSpec("read_notifications", "Read notifications, e.g. to get a code or message", mapOf("app" to (S to "only this app, optional"))),

@@ -60,21 +60,30 @@ import kotlin.math.min
  *
  * - Edge glow: a slowly rotating gradient around the screen edge while the agent works.
  * - Cursor: a pointer that glides to each target before the agent acts on it.
- * - Controls: a floating MIC button (always, while the service runs) that gains
+ * - Controls: a floating MIC button (while MeowClaw is switched on) that gains
  *   a STOP button during a task. It is the one touchable part, so the user can
  *   talk to, steer or stop the agent from inside any app.
  */
 class AgentOverlay(private val service: AccessibilityService) {
     private val main = Handler(Looper.getMainLooper())
     private val windowManager = service.getSystemService(WindowManager::class.java)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var view: OverlayView? = null
     private var controls: ControlPill? = null
     private var activeSessions = 0
 
     init {
-        main.post {
-            val pill = ControlPill(service, windowManager)
-            if (pill.attach()) controls = pill
+        // The floating controls follow the master power switch.
+        scope.launch {
+            service.graph.settings.settings.map { it.agentEnabled }.distinctUntilChanged().collect { on ->
+                if (on && controls == null) {
+                    val pill = ControlPill(service, windowManager)
+                    if (pill.attach()) controls = pill
+                } else if (!on) {
+                    controls?.detach()
+                    controls = null
+                }
+            }
         }
     }
 
@@ -121,6 +130,7 @@ class AgentOverlay(private val service: AccessibilityService) {
     }
 
     fun dispose() = main.post {
+        scope.cancel()
         activeSessions = 0
         detach()
         controls?.detach()
@@ -136,7 +146,8 @@ class AgentOverlay(private val service: AccessibilityService) {
     @SuppressLint("RtlHardcoded")
     private fun ensureAttached() {
         if (view != null) return
-        val overlayView = OverlayView(service)
+        // Keeps the display awake while the agent works; gestures fail on a dark screen.
+        val overlayView = OverlayView(service).apply { keepScreenOn = true }
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,

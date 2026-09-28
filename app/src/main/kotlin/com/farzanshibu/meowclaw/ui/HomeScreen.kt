@@ -84,6 +84,7 @@ import com.farzanshibu.meowclaw.AgentAccessibilityService
 import com.farzanshibu.meowclaw.agent.Mode
 import com.farzanshibu.meowclaw.graph
 import com.farzanshibu.meowclaw.llm.needle.NeedleState
+import com.farzanshibu.meowclaw.update.UpdateState
 import kotlinx.coroutines.launch
 import java.time.LocalTime
 
@@ -108,7 +109,9 @@ fun HomeScreen(onOpenSettings: () -> Unit, onOpenHistory: () -> Unit) {
     val llmReady = g.language.isConfigured
     val needleReady = needleState == NeedleState.Ready && settings.needleEnabled
 
+    val update by g.updater.status.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { g.chatHistory.load() }
+    LaunchedEffect(Unit) { g.updater.check() }
     LifecycleResumeEffect(Unit) {
         accessibilityOn = AgentAccessibilityService.isRunning()
         onPauseOrDispose { }
@@ -185,6 +188,9 @@ fun HomeScreen(onOpenSettings: () -> Unit, onOpenHistory: () -> Unit) {
                     BrutalIconButton(Icons.Rounded.Menu, "Menu", { scope.launch { drawer.open() } })
                     Spacer(Modifier.width(10.dp))
                     Box(Modifier.weight(1f)) { Wordmark() }
+                    // Master power for the whole agent: floating controls, voice, Telegram.
+                    BrutalSwitch(settings.agentEnabled, { on -> g.settings.update { it.copy(agentEnabled = on) } })
+                    Spacer(Modifier.width(10.dp))
                     BrutalIconButton(Icons.Rounded.Add, "New chat", g.controller::newChat, enabled = !ui.busy, fill = c.yellow)
                     Spacer(Modifier.width(8.dp))
                     BrutalIconButton(Icons.Rounded.Settings, "Settings", onOpenSettings)
@@ -193,8 +199,16 @@ fun HomeScreen(onOpenSettings: () -> Unit, onOpenHistory: () -> Unit) {
                 ModeSelector(ui.mode, g.controller::setMode)
 
                 when {
+                    !settings.agentEnabled -> Banner("MeowClaw is off. No floating controls, voice or remote.", "TURN ON", c.yellow) {
+                        g.settings.update { it.copy(agentEnabled = true) }
+                    }
                     !llmReady && !needleReady -> Banner("No AI yet — grab an on-device model or add an API.", "SET UP", c.orange, onOpenSettings)
                     ui.mode == Mode.AGENT && !accessibilityOn -> Banner("Screen Control is off. Multi-step tasks need it.", "ENABLE", c.pink, onOpenSettings)
+                }
+                (update as? UpdateState.Available)?.let { available ->
+                    Banner("MeowClaw v${available.manifest.versionName} is out.", "UPDATE", c.green) {
+                        scope.launch { g.updater.install(available.manifest) }
+                    }
                 }
                 if (ui.mode == Mode.AGENT) EngineStrip(needleReady, llmReady, g.language.isOnDevice, g.language.displayName)
 
@@ -226,6 +240,7 @@ fun HomeScreen(onOpenSettings: () -> Unit, onOpenHistory: () -> Unit) {
                     onMic = {
                         when {
                             listening -> g.handsFree.stop()
+                            !settings.agentEnabled -> g.toaster.show("Turn MeowClaw on first")
                             g.handsFree.hasPermission() -> g.handsFree.start()
                             else -> micPermission.launch(Manifest.permission.RECORD_AUDIO)
                         }

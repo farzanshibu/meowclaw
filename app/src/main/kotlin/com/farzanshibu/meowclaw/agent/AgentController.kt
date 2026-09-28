@@ -1,5 +1,6 @@
 package com.farzanshibu.meowclaw.agent
 
+import android.os.PowerManager
 import com.farzanshibu.meowclaw.AppGraph
 import com.farzanshibu.meowclaw.data.AgentAction
 import com.farzanshibu.meowclaw.data.ChatMessage
@@ -61,10 +62,17 @@ class AgentController(private val graph: AppGraph) {
         }
         val mode = state.value.mode
         if (echo) append(ChatMessage("user", trimmed))
+        if (!graph.settings.current.agentEnabled) {
+            append(ChatMessage("assistant", "MeowClaw is switched off. Turn it on from the home screen.", source = ReplySource.SYSTEM))
+            return
+        }
         steering.clear()
         graph.liveStatus.start(trimmed)
         state.update { it.copy(busy = true) }
         AgentService.sync(graph.context)
+        // Glow while anything runs; gestures need the screen awake.
+        graph.input.beginSession()
+        val wakeLock = acquireScreen()
 
         job = graph.scope.launch {
             persist()
@@ -145,6 +153,8 @@ class AgentController(private val graph: AppGraph) {
                 dropPlaceholder()
                 append(ChatMessage("assistant", "Error: ${e.message}", source = ReplySource.SYSTEM))
             } finally {
+                graph.input.endSession()
+                if (wakeLock.isHeld) wakeLock.release()
                 graph.liveStatus.clear()
                 state.update { it.copy(busy = false) }
                 // A cancelled coroutine can't suspend; save the chat regardless.
@@ -201,6 +211,13 @@ class AgentController(private val graph: AppGraph) {
             RegexOption.IGNORE_CASE,
         )
     }
+
+    /** Turns the screen on if it is off and keeps it on while a request runs. */
+    @Suppress("DEPRECATION")
+    private fun acquireScreen(): PowerManager.WakeLock =
+        graph.context.getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "MeowClaw:task")
+            .apply { acquire(30 * 60_000L) }
 
     private fun append(message: ChatMessage) = state.update { it.copy(messages = it.messages + message) }
 

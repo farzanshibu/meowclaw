@@ -35,6 +35,8 @@ data class AppSettings(
     val sendScreenshots: Boolean = true,
     /** The API model accepts image input (OpenAI-style image_url parts). */
     val apiVision: Boolean = false,
+    /** Master power: off hides the floating controls, stops voice and Telegram, and refuses requests. */
+    val agentEnabled: Boolean = true,
 ) {
     val effectiveMaxSteps: Int get() = if (disableMaxSteps) 999 else maxSteps
 
@@ -93,6 +95,7 @@ class SettingsStore(context: Context) {
         localModelId = prefs.getString(K_LOCAL_MODEL, "") ?: "",
         sendScreenshots = prefs.getBoolean(K_SCREENSHOTS, true),
         apiVision = prefs.getBoolean(K_API_VISION, false),
+        agentEnabled = prefs.getBoolean(K_AGENT_ENABLED, true),
     )
 
     private fun write(s: AppSettings) = prefs.edit {
@@ -116,6 +119,7 @@ class SettingsStore(context: Context) {
         putString(K_LOCAL_MODEL, s.localModelId)
         putBoolean(K_SCREENSHOTS, s.sendScreenshots)
         putBoolean(K_API_VISION, s.apiVision)
+        putBoolean(K_AGENT_ENABLED, s.agentEnabled)
     }
 
     companion object {
@@ -139,5 +143,6 @@ class SettingsStore(context: Context) {
         const val K_LOCAL_MODEL = "local_model_id"
         const val K_SCREENSHOTS = "send_screenshots"
         const val K_API_VISION = "api_vision"
+        const val K_AGENT_ENABLED = "agent_enabled"
     }
 }

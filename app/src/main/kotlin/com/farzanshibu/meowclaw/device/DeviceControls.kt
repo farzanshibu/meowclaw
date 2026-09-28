@@ -93,7 +93,13 @@ class AppLauncher(private val context: Context) {
     }
 
     private fun launch(packageName: String, label: String): String {
-        val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+        val pm = context.packageManager
+        // getLaunchIntentForPackage needs package visibility; the launcher-intent query
+        // declared in the manifest finds the same activity for any installed app.
+        val intent = pm.getLaunchIntentForPackage(packageName)
+            ?: pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(packageName), 0)
+                .firstOrNull()?.activityInfo
+                ?.let { Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setClassName(it.packageName, it.name) }
             ?: return "Error opening $label: no launchable activity"
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         return try {

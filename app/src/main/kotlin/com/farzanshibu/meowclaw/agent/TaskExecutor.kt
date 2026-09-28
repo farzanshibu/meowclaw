@@ -37,6 +37,12 @@ class TaskExecutor(private val graph: AppGraph) {
         var totalTokens = 0
         var step = 0
         try {
+            // Keep the agent from reading or touching its own chat, including skill replays.
+            if (graph.screen.currentPackage() == graph.context.packageName) {
+                onProgress("Moving to background...")
+                graph.input.global("home")
+                delay(1_200)
+            }
             graph.skills.find(goal)?.takeIf(SavedSkill::isReliable)?.let { skill ->
                 onProgress("Found saved skill! Replaying ${skill.steps.size} steps...")
                 live { it.copy(phase = Phase.ACTING, action = "Replaying", detail = "saved skill") }
@@ -67,11 +73,6 @@ class TaskExecutor(private val graph: AppGraph) {
                     executed += s
                     lastAction = s.action
                 }
-            } else if (graph.screen.currentPackage() == graph.context.packageName) {
-                // Keep the agent from reading its own chat as the screen.
-                onProgress("Moving to background...")
-                graph.input.global("home")
-                delay(1_200)
             }
 
             val fastPath = GoalFastPath(goal, skipFirstOpen = shortcut?.firstOrNull()?.action == "open_app")

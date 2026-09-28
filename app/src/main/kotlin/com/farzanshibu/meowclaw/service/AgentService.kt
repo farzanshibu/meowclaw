@@ -55,7 +55,7 @@ class AgentService : LifecycleService() {
             ACTION_STOP_LISTENING -> g.handsFree.stop()
         }
         val s = g.settings.current
-        val telegramOn = s.telegramEnabled && s.telegramToken.isNotBlank()
+        val telegramOn = s.agentEnabled && s.telegramEnabled && s.telegramToken.isNotBlank()
         val busy = g.controller.isBusy
         val listening = g.handsFree.isActive
         if (!telegramOn && !busy && !listening) {
@@ -134,7 +134,8 @@ class AgentService : LifecycleService() {
         fun sync(context: Context) {
             val g = context.graph
             val s = g.settings.current
-            val needed = (s.telegramEnabled && s.telegramToken.isNotBlank()) || g.controller.isBusy || g.handsFree.isActive
+            val needed = (s.agentEnabled && s.telegramEnabled && s.telegramToken.isNotBlank()) ||
+                g.controller.isBusy || g.handsFree.isActive
             val intent = Intent(context, AgentService::class.java)
             try {
                 if (needed) context.startForegroundService(intent) else context.stopService(intent)

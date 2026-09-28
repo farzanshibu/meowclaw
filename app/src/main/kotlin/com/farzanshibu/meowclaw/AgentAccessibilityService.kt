@@ -161,6 +161,21 @@ class AgentAccessibilityService : AccessibilityService() {
             ?: findNode(root, target, exact = false, skipEditable = false)
     }?.let { Rect().also(it::getBoundsInScreen) }
 
+    /** Clicks the smallest clickable node under ([x], [y]); the fallback when a tap gesture is refused. */
+    fun clickAt(x: Float, y: Float): Boolean = forEachForeignRoot { root ->
+        smallestClickableAt(root, x.toInt(), y.toInt())?.takeIf { it.performAction(AccessibilityNodeInfo.ACTION_CLICK) }?.let { true }
+    } ?: false
+
+    private fun smallestClickableAt(node: AccessibilityNodeInfo, x: Int, y: Int): AccessibilityNodeInfo? {
+        val rect = Rect().also(node::getBoundsInScreen)
+        if (!rect.contains(x, y) || !node.isVisibleToUser) return null
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            smallestClickableAt(child, x, y)?.let { return it }
+        }
+        return node.takeIf { it.isClickable && it.isEnabled }
+    }
+
     fun clickByText(target: String): Boolean = forEachForeignRoot { root ->
         val node = findNode(root, target, true, true) ?: findNode(root, target, false, true)
             ?: findNode(root, target, true, false) ?: findNode(root, target, false, false)
@@ -190,16 +205,80 @@ class AgentAccessibilityService : AccessibilityService() {
 
     /** Sets text on an editable field matching [hint] (or the focused/first one). */
     fun setText(text: String, hint: String?): Rect? = forEachForeignRoot { root ->
-        val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable && hint.isNullOrBlank() }
-            ?: findEditable(root, hint) ?: (if (!hint.isNullOrBlank()) findEditable(root, null) else null)
-        node?.let {
+        editableNode(root, hint)?.let {
             it.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
             val args = Bundle().apply {
                 putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
             }
-            if (it.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) Rect().also(it::getBoundsInScreen) else null
+            // Some apps (Instagram search, many React Native fields) report success but keep
+            // their own text; only count it when the field really shows what was typed.
+            val took = it.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) &&
+                (it.isPassword || !it.refresh() || it.text?.toString()?.contains(text.trim(), ignoreCase = true) == true)
+            if (took) Rect().also(it::getBoundsInScreen) else null
         }
     }
+
+    /**
+     * Taps a search button or bar that opens the real text field (Instagram,
+     * Maps, YouTube, Play Store). These are often views that look like a text
+     * field but are neither editable nor marked clickable, so a failed click
+     * falls back to a tap on their bounds. Returns true when something was tapped.
+     */
+    fun openSearchField(): Boolean = forEachForeignRoot { root ->
+        val candidates = mutableListOf<AccessibilityNodeInfo>().also { collectSearchControls(root, it) }
+        // A text-field look-alike beats an icon; the topmost one is usually the search bar.
+        candidates.sortedWith(compareByDescending<AccessibilityNodeInfo> { it.className?.contains("EditText") == true }
+            .thenBy { Rect().also(it::getBoundsInScreen).top })
+            .firstOrNull()?.let { if (clickNodeOrParent(it)) true else null }
+    } ?: false
+
+    private fun collectSearchControls(node: AccessibilityNodeInfo, out: MutableList<AccessibilityNodeInfo>) {
+        if (node.isVisibleToUser && !node.isEditable) {
+            val label = listOfNotNull(node.text, node.contentDescription, node.viewIdResourceName, node.hintText)
+                .joinToString(" ").lowercase()
+            val looksLikeField = node.className?.contains("EditText") == true || node.className?.contains("SearchView") == true
+            if (("search" in label || looksLikeField) && SEARCH_EXCLUDE.none { it in label }) out += node
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            collectSearchControls(child, out)
+        }
+    }
+
+    /** The field a text edit targets: the focused input, else one matching [hint], else the first editable. */
+    private fun editableNode(root: AccessibilityNodeInfo, hint: String?): AccessibilityNodeInfo? =
+        root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable && hint.isNullOrBlank() }
+            ?: findEditable(root, hint) ?: (if (!hint.isNullOrBlank()) findEditable(root, null) else null)
+
+    /**
+     * Selects characters [start]..[end] of a field (the whole text when both are null).
+     * Returns the selected text, or null when no field accepted the selection.
+     */
+    fun selectText(hint: String?, start: Int?, end: Int?): String? = forEachForeignRoot { root ->
+        val node = editableNode(root, hint) ?: return@forEachForeignRoot null
+        val text = node.text?.toString().orEmpty()
+        val from = (start ?: 0).coerceIn(0, text.length)
+        val to = (end ?: text.length).coerceIn(from, text.length)
+        node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        val args = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, from)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, to)
+        }
+        if (node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)) text.substring(from, to) else null
+    }
+
+    /** Copies the selection of the focused field (or of the field matching [hint]). */
+    fun copySelection(hint: String?): Boolean = forEachForeignRoot { root ->
+        editableNode(root, hint)?.takeIf { it.performAction(AccessibilityNodeInfo.ACTION_COPY) }?.let { true }
+    } ?: false
+
+    /** Pastes the clipboard into the focused field (or the field matching [hint]) at its cursor. */
+    fun paste(hint: String?): Boolean = forEachForeignRoot { root ->
+        editableNode(root, hint)?.let { node ->
+            node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) true else null
+        }
+    } ?: false
 
     /** Bounds of the editable field the agent would type into, for cursor placement. */
     fun editableTarget(hint: String?): Rect? = forEachForeignRoot { root ->
@@ -220,26 +299,25 @@ class AgentAccessibilityService : AccessibilityService() {
         return null
     }
 
+    /** Scrolls the biggest scrollable container (the main list, not a chip row) that accepts the action. */
     fun scrollNode(direction: String, target: String?): Boolean = forEachForeignRoot { root ->
-        findScrollable(root, target)?.let {
-            val action = when (direction.lowercase()) {
-                "up", "backward", "left" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-                else -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-            }
-            if (it.performAction(action)) true else null
+        val action = when (direction.lowercase()) {
+            "up", "backward", "left" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            else -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
         }
+        val candidates = mutableListOf<AccessibilityNodeInfo>().also { collectScrollable(root, target, it) }
+        candidates.sortedByDescending { n -> Rect().also(n::getBoundsInScreen).let { it.width().toLong() * it.height() } }
+            .firstOrNull { it.performAction(action) }?.let { true }
     } ?: false
 
-    private fun findScrollable(node: AccessibilityNodeInfo, target: String?): AccessibilityNodeInfo? {
-        if (node.isScrollable && node.isVisibleToUser) {
-            if (target == null) return node
-            if (node.text?.contains(target, true) == true || node.contentDescription?.contains(target, true) == true) return node
-        }
+    private fun collectScrollable(node: AccessibilityNodeInfo, target: String?, out: MutableList<AccessibilityNodeInfo>) {
+        if (node.isScrollable && node.isVisibleToUser &&
+            (target == null || node.text?.contains(target, true) == true || node.contentDescription?.contains(target, true) == true)
+        ) out += node
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            findScrollable(child, target)?.let { return it }
+            collectScrollable(child, target, out)
         }
-        return null
     }
 
     /** IME "enter" on the focused field, then a visible keyboard action key. */
@@ -351,6 +429,9 @@ class AgentAccessibilityService : AccessibilityService() {
             private set
 
         fun isRunning(): Boolean = instance != null
+
+        /** Search-related controls that do not open a text field. */
+        private val SEARCH_EXCLUDE = listOf("voice", "mic", "camera", "lens", "image", "filter", "history", "clear")
 
         private val KEYBOARD_ACTIONS = setOf("search", "enter", "go", "done", "send", "next")
     }
