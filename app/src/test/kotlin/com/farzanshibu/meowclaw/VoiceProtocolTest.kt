@@ -180,3 +180,17 @@ class VoiceProtocolTest {
         assertEquals(24000, ByteBuffer.wrap(wav, 24, 4).order(ByteOrder.LITTLE_ENDIAN).int)
     }
 }
+
+/** Real error frames captured from the live providers with an invalid key (2026-10-04). */
+class VoiceLiveErrorFramesTest {
+    @Test fun realAuthErrorsEndTheUtteranceSoTheChainFallsBack() {
+        val openAi = """{"type":"error","event_id":"event_x","error":{"type":"invalid_request_error","code":"invalid_api_key","message":"Incorrect API key provided: sk-bogus."}}"""
+        val o = VoiceProtocol.sttEvent(VoiceProvider.OPENAI, SttState(), openAi)
+        assertTrue(o.done)
+        assertTrue(o.error!!.startsWith("Incorrect API key"))
+        val el = VoiceProtocol.sttEvent(VoiceProvider.ELEVENLABS, SttState(), """{"message_type":"auth_error","error":"You must be authenticated to use this endpoint."}""")
+        assertTrue(el.done)
+        assertEquals("You must be authenticated to use this endpoint.", el.error)
+        assertEquals("", el.text)
+    }
+}
