@@ -61,7 +61,7 @@ class AppGraph(val context: Context) {
     val liveStatus = LiveStatus()
     val notifications = NotificationTools(context)
     val toaster = Toaster(context)
-    val speaker by lazy { Speaker(context).also { it.onSpeaking = handsFree::pause } }
+    val speaker by lazy { Speaker(context) { settings.current.voice }.also { it.onSpeaking = handsFree::pause } }
 
     val input = InputController(context, shell)
     val screen = ScreenReader()
@@ -79,7 +79,7 @@ class AppGraph(val context: Context) {
     val brain = AgentBrain(this)
     val controller = AgentController(this)
     /** Continuous voice: new commands when idle, steering while a task runs. */
-    val handsFree = HandsFreeVoice(context) { controller.send(it) }
+    val handsFree = HandsFreeVoice(context, { settings.current.voice }) { controller.send(it) }
     val updater = AppUpdater(context)
 
     /**

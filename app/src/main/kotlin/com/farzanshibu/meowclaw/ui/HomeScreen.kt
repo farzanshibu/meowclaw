@@ -404,6 +404,7 @@ private fun InputBar(
     onMic: () -> Unit,
 ) {
     val c = Brutal.colors
+    val heard by LocalContext.current.graph.handsFree.partial.collectAsStateWithLifecycle()
     Row(
         Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 10.dp),
         verticalAlignment = Alignment.Bottom,
@@ -420,6 +421,7 @@ private fun InputBar(
         ) {
             if (value.isEmpty()) Text(
                 when {
+                    listening && heard.isNotBlank() -> "“$heard”"
                     busy -> if (listening) "Listening — speak to steer, or say stop" else "Steer the task, or say stop…"
                     listening -> "Listening…"
                     else -> "Type a command..."

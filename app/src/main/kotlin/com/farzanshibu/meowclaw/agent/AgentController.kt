@@ -7,6 +7,7 @@ import com.farzanshibu.meowclaw.data.ChatMessage
 import com.farzanshibu.meowclaw.data.ChatSession
 import com.farzanshibu.meowclaw.data.ReplySource
 import com.farzanshibu.meowclaw.data.nowIso
+import com.farzanshibu.meowclaw.device.VoiceProtocol
 import com.farzanshibu.meowclaw.service.AgentService
 import com.farzanshibu.meowclaw.service.LiveTask
 import kotlinx.coroutines.CancellationException
@@ -142,6 +143,17 @@ class AgentController(private val graph: AppGraph) {
                             graph.notifier.taskFinished(
                                 if (outcome.result.success) "Task Completed" else "Task Failed",
                                 outcome.result.details ?: "Agent finished its goal.",
+                            )
+                        }
+                        // Jarvis speak-back: say how the task went.
+                        val s = graph.settings.current
+                        if (s.speakTaskResults) {
+                            graph.speaker.speak(
+                                VoiceProtocol.taskLine(
+                                    s.voice, outcome.result.success,
+                                    outcome.response.ifBlank { outcome.result.details.orEmpty() },
+                                    pick = (System.nanoTime() % 7).toInt(),
+                                ),
                             )
                         }
                     }

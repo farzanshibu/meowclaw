@@ -47,6 +47,11 @@ While the agent is in control, a **cursor** glides to each target with a click r
 ## Features
 
 - Chat and Agent modes, voice input, spoken replies, chat history
+- **Jarvis voice**: natural cloud voices for replies and hands-free listening, with the phone's own engines as offline fallback
+  - Speaks: **ElevenLabs** (Flash v2.5), **OpenAI** (gpt-4o-mini-tts, steerable), **Deepgram** (Aura-2)
+  - Hears: **OpenAI** Realtime transcription, **Deepgram** Nova-3 streaming, **ElevenLabs** Scribe v2 Realtime, with live partial text
+  - Announces finished tasks in a butler persona ("Done, sir. Opened YouTube."); name and persona are configurable
+  - Set it up in **Settings → Voice**. Keys stay on the device.
 - Skill memory: successful step sequences replay without the model
 - Task history with full traces and token counts
 - Telegram remote control. The first chat to message the bot becomes its only owner.

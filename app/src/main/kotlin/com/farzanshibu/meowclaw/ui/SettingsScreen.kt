@@ -117,6 +117,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenHistory: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 BrainSection(settings) { message -> scope.launch { snackbar.showSnackbar(message) } }
+                VoiceSection(settings) { message -> scope.launch { snackbar.showSnackbar(message) } }
                 OnDeviceSection(settings)
                 ControlSection()
 
@@ -672,4 +673,3 @@ fun openAppInfo(context: Context) {
         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")).newTask(),
     )
 }
-
