@@ -161,10 +161,20 @@ class Toaster(private val context: Context) {
     }
 }
 
-/** Text-to-speech for spoken replies. */
-class Speaker(context: Context) {
+/**
+ * Spoken replies. Uses the configured cloud voice (ElevenLabs, OpenAI or Deepgram)
+ * and falls back down the chain to Android's built-in text-to-speech.
+ */
+class Speaker(context: Context, private val config: () -> VoiceConfig = { VoiceConfig() }) {
     @Volatile private var ready = false
     private lateinit var tts: TextToSpeech
+    private val cloud = CloudTts()
+    private val worker = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "meowclaw-voice-out") }
+    @Volatile private var generation = 0
+
+    /** The provider that spoke last, for the settings screen. */
+    @Volatile var lastProvider: VoiceProvider? = null
+        private set
 
     /** Called with true when speech starts and false when it ends, so the microphone can pause. */
     var onSpeaking: ((Boolean) -> Unit)? = null
@@ -186,14 +196,32 @@ class Speaker(context: Context) {
     }
 
     fun speak(text: String) {
-        if (!ready || text.isBlank()) return
+        if (text.isBlank()) return
         // Markdown symbols read badly aloud.
-        val plain = text.replace(Regex("[*_#`>|]"), "").take(TextToSpeech.getMaxSpeechInputLength() - 1)
-        tts.speak(plain, TextToSpeech.QUEUE_FLUSH, null, "reply")
+        val plain = VoiceProtocol.speakable(text).take(TextToSpeech.getMaxSpeechInputLength() - 1)
+        if (plain.isBlank()) return
+        val c = config()
+        stop()
+        val gen = ++generation
+        worker.execute {
+            for (provider in c.ttsChain) {
+                if (gen != generation) return@execute
+                if (provider == VoiceProvider.SYSTEM) {
+                    lastProvider = provider
+                    if (ready) tts.speak(plain, TextToSpeech.QUEUE_FLUSH, null, "reply")
+                    return@execute
+                }
+                onSpeaking?.invoke(true)
+                val ok = try { cloud.speak(provider, c, plain) } finally { onSpeaking?.invoke(false) }
+                if (ok) { lastProvider = provider; return@execute }
+            }
+        }
     }
 
     fun stop() {
-        tts.stop()
+        generation++
+        cloud.stop()
+        if (ready) tts.stop()
     }
 }
 
@@ -203,17 +231,34 @@ class Speaker(context: Context) {
  * to [onUtterance]. Paused while the agent itself speaks so it doesn't hear
  * its own replies. Recognition needs the main thread; every entry point posts to it.
  */
-class HandsFreeVoice(private val context: Context, private val onUtterance: (String) -> Unit) {
+class HandsFreeVoice(
+    private val context: Context,
+    private val config: () -> VoiceConfig = { VoiceConfig() },
+    private val onUtterance: (String) -> Unit,
+) {
     private val main = Handler(Looper.getMainLooper())
     private val activeFlow = MutableStateFlow(false)
     val active: StateFlow<Boolean> = activeFlow.asStateFlow()
     val isActive: Boolean get() = activeFlow.value
+    private val partialFlow = MutableStateFlow("")
+    /** Live words while a cloud provider is transcribing you. */
+    val partial: StateFlow<String> = partialFlow.asStateFlow()
 
     private var recognizer: SpeechRecognizer? = null
     private var paused = false
     private var errorStreak = 0
+    /** The in-flight cloud utterance; replaced (and the old one cancelled) on every release. */
+    private var cloud: CloudStt? = null
+    private var cloudGen = 0
 
-    val isAvailable: Boolean get() = SpeechRecognizer.isRecognitionAvailable(context)
+    /** After every cloud provider fails, use the system recognizer until this time. */
+    private var cloudCooldownUntil = 0L
+
+    private val usesCloud: Boolean
+        get() = config().sttChain.first() != VoiceProvider.SYSTEM &&
+            System.currentTimeMillis() >= cloudCooldownUntil
+
+    val isAvailable: Boolean get() = usesCloud || SpeechRecognizer.isRecognitionAvailable(context)
 
     fun hasPermission() = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
@@ -238,7 +283,8 @@ class HandsFreeVoice(private val context: Context, private val onUtterance: (Str
     }
 
     private fun listen() {
-        if (!activeFlow.value || paused || recognizer != null) return
+        if (!activeFlow.value || paused || recognizer != null || cloud != null) return
+        if (usesCloud) return listenCloud()
         val sr = SpeechRecognizer.createSpeechRecognizer(context)
         recognizer = sr
         sr.setRecognitionListener(object : RecognitionListener {
@@ -285,10 +331,51 @@ class HandsFreeVoice(private val context: Context, private val onUtterance: (Str
     }
 
     private fun release() {
+        cloud?.cancel()
+        cloud = null
+        cloudGen++
+        partialFlow.value = ""
         recognizer?.run {
             cancel()
             destroy()
         }
         recognizer = null
+    }
+
+    /** One cloud utterance on a worker thread; loops back through [listen] like the system path. */
+    private fun listenCloud() {
+        val c = config()
+        val stt = CloudStt()
+        cloud = stt
+        val gen = ++cloudGen
+        val t = Thread({
+            var heard: String? = null
+            for (provider in c.sttChain) {
+                if (provider == VoiceProvider.SYSTEM) break
+                heard = stt.listenOnce(provider, c) { if (gen == cloudGen) partialFlow.value = it }
+                if (heard != null) break
+            }
+            main.post {
+                // Stopped, paused or superseded while we were listening: drop it.
+                if (gen != cloudGen) return@post
+                cloud = null
+                partialFlow.value = ""
+                when {
+                    heard == null -> {
+                        // Every cloud provider failed (offline, bad key, quota): use the
+                        // phone's own recognizer for a minute, then try the cloud again.
+                        cloudCooldownUntil = System.currentTimeMillis() + 60_000
+                        main.postDelayed(::listen, 500L shl minOf(errorStreak++, 4))
+                    }
+                    heard.isBlank() -> main.postDelayed(::listen, 100)
+                    else -> {
+                        errorStreak = 0
+                        onUtterance(heard)
+                        main.postDelayed(::listen, 0)
+                    }
+                }
+            }
+        }, "meowclaw-voice-in")
+        t.start()
     }
 }

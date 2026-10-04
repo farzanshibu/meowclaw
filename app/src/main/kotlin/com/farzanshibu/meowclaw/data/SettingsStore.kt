@@ -3,6 +3,8 @@ package com.farzanshibu.meowclaw.data
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import com.farzanshibu.meowclaw.device.VoiceConfig
+import com.farzanshibu.meowclaw.device.VoiceProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,8 +39,31 @@ data class AppSettings(
     val apiVision: Boolean = false,
     /** Master power: off hides the floating controls, stops voice and Telegram, and refuses requests. */
     val agentEnabled: Boolean = true,
+    /** Voice: who speaks replies and who hears you. SYSTEM = Android's built-in engines. */
+    val ttsProvider: VoiceProvider = VoiceProvider.SYSTEM,
+    val sttProvider: VoiceProvider = VoiceProvider.SYSTEM,
+    val elevenLabsKey: String = "",
+    val openAiVoiceKey: String = "",
+    val deepgramKey: String = "",
+    val elevenLabsVoice: String = VoiceConfig.DEFAULT_ELEVENLABS_VOICE,
+    val openAiVoice: String = VoiceConfig.DEFAULT_OPENAI_VOICE,
+    val deepgramVoice: String = VoiceConfig.DEFAULT_DEEPGRAM_VOICE,
+    /** Jarvis persona: butler-style phrasing and voice direction. */
+    val jarvisVoice: Boolean = true,
+    /** How Jarvis addresses you. */
+    val voiceUserName: String = "sir",
+    /** Speak a short line when a device task finishes. */
+    val speakTaskResults: Boolean = true,
 ) {
     val effectiveMaxSteps: Int get() = if (disableMaxSteps) 999 else maxSteps
+
+    val voice: VoiceConfig
+        get() = VoiceConfig(
+            ttsProvider = ttsProvider, sttProvider = sttProvider,
+            elevenLabsKey = elevenLabsKey, openAiKey = openAiVoiceKey, deepgramKey = deepgramKey,
+            elevenLabsVoice = elevenLabsVoice, openAiVoice = openAiVoice, deepgramVoice = deepgramVoice,
+            jarvis = jarvisVoice, userName = voiceUserName,
+        )
 
     /** Local servers (llama.cpp, Ollama, LM Studio) usually run without a key. */
     val isApiConfigured: Boolean
@@ -96,7 +121,21 @@ class SettingsStore(context: Context) {
         sendScreenshots = prefs.getBoolean(K_SCREENSHOTS, true),
         apiVision = prefs.getBoolean(K_API_VISION, false),
         agentEnabled = prefs.getBoolean(K_AGENT_ENABLED, true),
+        ttsProvider = enumPref(K_TTS_PROVIDER, VoiceProvider.SYSTEM),
+        sttProvider = enumPref(K_STT_PROVIDER, VoiceProvider.SYSTEM),
+        elevenLabsKey = prefs.getString(K_ELEVENLABS_KEY, "") ?: "",
+        openAiVoiceKey = prefs.getString(K_OPENAI_VOICE_KEY, "") ?: "",
+        deepgramKey = prefs.getString(K_DEEPGRAM_KEY, "") ?: "",
+        elevenLabsVoice = prefs.getString(K_ELEVENLABS_VOICE, null) ?: VoiceConfig.DEFAULT_ELEVENLABS_VOICE,
+        openAiVoice = prefs.getString(K_OPENAI_VOICE, null) ?: VoiceConfig.DEFAULT_OPENAI_VOICE,
+        deepgramVoice = prefs.getString(K_DEEPGRAM_VOICE, null) ?: VoiceConfig.DEFAULT_DEEPGRAM_VOICE,
+        jarvisVoice = prefs.getBoolean(K_JARVIS_VOICE, true),
+        voiceUserName = prefs.getString(K_VOICE_USER_NAME, null) ?: "sir",
+        speakTaskResults = prefs.getBoolean(K_SPEAK_TASK_RESULTS, true),
     )
+
+    private inline fun <reified E : Enum<E>> enumPref(key: String, default: E): E =
+        runCatching { enumValueOf<E>(prefs.getString(key, default.name)!!) }.getOrDefault(default)
 
     private fun write(s: AppSettings) = prefs.edit {
         putString(K_API_KEY, s.apiKey)
@@ -120,6 +159,17 @@ class SettingsStore(context: Context) {
         putBoolean(K_SCREENSHOTS, s.sendScreenshots)
         putBoolean(K_API_VISION, s.apiVision)
         putBoolean(K_AGENT_ENABLED, s.agentEnabled)
+        putString(K_TTS_PROVIDER, s.ttsProvider.name)
+        putString(K_STT_PROVIDER, s.sttProvider.name)
+        putString(K_ELEVENLABS_KEY, s.elevenLabsKey)
+        putString(K_OPENAI_VOICE_KEY, s.openAiVoiceKey)
+        putString(K_DEEPGRAM_KEY, s.deepgramKey)
+        putString(K_ELEVENLABS_VOICE, s.elevenLabsVoice)
+        putString(K_OPENAI_VOICE, s.openAiVoice)
+        putString(K_DEEPGRAM_VOICE, s.deepgramVoice)
+        putBoolean(K_JARVIS_VOICE, s.jarvisVoice)
+        putString(K_VOICE_USER_NAME, s.voiceUserName)
+        putBoolean(K_SPEAK_TASK_RESULTS, s.speakTaskResults)
     }
 
     companion object {
@@ -144,5 +194,16 @@ class SettingsStore(context: Context) {
         const val K_SCREENSHOTS = "send_screenshots"
         const val K_API_VISION = "api_vision"
         const val K_AGENT_ENABLED = "agent_enabled"
+        const val K_TTS_PROVIDER = "voice_tts_provider"
+        const val K_STT_PROVIDER = "voice_stt_provider"
+        const val K_ELEVENLABS_KEY = "voice_elevenlabs_key"
+        const val K_OPENAI_VOICE_KEY = "voice_openai_key"
+        const val K_DEEPGRAM_KEY = "voice_deepgram_key"
+        const val K_ELEVENLABS_VOICE = "voice_elevenlabs_voice"
+        const val K_OPENAI_VOICE = "voice_openai_voice"
+        const val K_DEEPGRAM_VOICE = "voice_deepgram_voice"
+        const val K_JARVIS_VOICE = "voice_jarvis"
+        const val K_VOICE_USER_NAME = "voice_user_name"
+        const val K_SPEAK_TASK_RESULTS = "voice_speak_task_results"
     }
 }
